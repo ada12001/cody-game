@@ -30,6 +30,11 @@
   @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.07)} }
   #title-screen p { color:#fff; font-size:min(5vw,24px); margin-top:22px; text-shadow:0 2px 4px rgba(0,0,0,.3); }
 
+  #reset-btn {
+    margin-top:16px; font-family:inherit; font-size:20px; padding:8px 26px; border:none;
+    border-radius:30px; background:rgba(255,255,255,.85); color:#555; cursor:pointer;
+  }
+
   #reward-screen { display:none; background:rgba(20,10,60,.55); }
   #reward-card {
     background:linear-gradient(#fff8d0,#ffe08a); border:8px solid #ffb300; border-radius:36px;
@@ -50,7 +55,7 @@
   }
   .tbtn:active { background:rgba(255,235,120,.9); }
   #btn-left { left:20px; } #btn-right { left:124px; }
-  #btn-jump { right:20px; } #btn-dig { right:124px; }
+  #btn-jump { right:20px; } #btn-dig { right:124px; } #btn-web { right:228px; }
 
   #mute {
     position:fixed; top:12px; right:12px; z-index:6; width:52px; height:52px; border-radius:50%;
@@ -94,7 +99,8 @@
   <div class="spidey">🕷️</div>
   <h1>SPIDERMAN LOBBY</h1>
   <button class="bigbtn" id="play-btn">▶ PLAY!</button>
-  <p>Dig for gems! ⛏️💎 Bounce on trampolines! 🤸 Build at the factory! 🏭</p>
+  <p>Dig! ⛏️💎 Swing webs — hold the screen or X! 🕸️ Bounce to the sky! 🤸 Build! 🏭</p>
+  <button id="reset-btn" style="display:none">🧹 Start Over</button>
 </div>
 
 <div id="reward-screen" class="overlay">
@@ -108,6 +114,7 @@
 <div id="touch-controls">
   <div class="tbtn" id="btn-left">◀</div>
   <div class="tbtn" id="btn-right">▶</div>
+  <div class="tbtn" id="btn-web">🕸️</div>
   <div class="tbtn" id="btn-dig">⛏️</div>
   <div class="tbtn" id="btn-jump">🆙</div>
 </div>
@@ -161,6 +168,9 @@ const sfx = {
   jump:    () => tone(330, 0.12, "square", 0.07),
   bounce:  () => { tone(220, 0.08, "square", 0.12); tone(440, 0.1, "square", 0.1, 0.06); tone(660, 0.16, "square", 0.09, 0.12); },
   reward:  () => { [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.22, "triangle", 0.14, i * 0.11)); },
+  thwip:   () => { tone(700, 0.05, "sawtooth", 0.09); tone(340, 0.09, "sawtooth", 0.07, 0.03); },
+  whee:    () => { tone(400, 0.12, "triangle", 0.12); tone(600, 0.12, "triangle", 0.12, 0.09); tone(800, 0.18, "triangle", 0.1, 0.18); },
+  vroom:   () => { tone(80, 0.4, "sawtooth", 0.14); tone(120, 0.35, "sawtooth", 0.1, 0.1); tone(160, 0.3, "sawtooth", 0.08, 0.25); },
 };
 document.getElementById("mute").addEventListener("click", () => {
   muted = !muted;
@@ -169,9 +179,20 @@ document.getElementById("mute").addEventListener("click", () => {
 
 // ============================== WORLD ==============================
 const TILE = 44;
-const COLS = 90, ROWS = 48, SURFACE = 14;
+const COLS = 90, ROWS = 74, SURFACE = 40;
 // tile ids: 0 air, 1 grass, 2 dirt, 3 stone, 4 gold, 5 emerald, 6 diamond, 7 rainbow, 9 bedrock
 const HARDNESS = { 1: 0.35, 2: 0.4, 3: 0.85, 4: 0.6, 5: 0.6, 6: 0.9, 7: 1.0 };
+// floating cloud platforms (tile 8): a bouncy tower into the sky, plus side perches
+const PLATFORMS = [
+  { c0: 20, c1: 23, r: SURFACE - 5 },
+  { c0: 68, c1: 71, r: SURFACE - 6 },
+  { c0: 44, c1: 47, r: SURFACE - 6 },
+  { c0: 52, c1: 55, r: SURFACE - 12 },
+  { c0: 43, c1: 46, r: SURFACE - 18 },
+  { c0: 51, c1: 54, r: SURFACE - 24 },
+  { c0: 44, c1: 48, r: SURFACE - 30 },
+  { c0: 49, c1: 53, r: SURFACE - 35 },
+];
 const grid = [];
 function genWorld() {
   for (let r = 0; r < ROWS; r++) {
@@ -194,6 +215,7 @@ function genWorld() {
   }
   // border walls above ground so nobody walks off the world
   for (let r = SURFACE - 6; r < SURFACE; r++) { grid[r][0] = 9; grid[r][COLS - 1] = 9; }
+  for (const pl of PLATFORMS) for (let c = pl.c0; c <= pl.c1; c++) grid[pl.r][c] = 8;
 }
 genWorld();
 const solid = t => t !== 0;
@@ -207,15 +229,22 @@ const player = {
   facing: 1, onGround: false, onWall: 0,
   jumps: 2, squash: 0, walkT: 0,
   hat: null,
+  web: null, webHeld: false, boostVx: 0,
+  floatT: 0, carT: 0, rocketT: 0, combo: 0,
 };
 const GRAV = 1600, MOVE = 260, JUMP = 640, TRAMP = 1250, CLIMB = 170;
 
 // ============================== INPUT ==============================
-const input = { left: false, right: false, up: false, down: false, jumpPressed: false };
+const input = { left: false, right: false, up: false, down: false, web: false, jumpPressed: false };
 const keymap = {
   ArrowLeft: "left", a: "left", ArrowRight: "right", d: "right",
   ArrowUp: "up", w: "up", " ": "up", ArrowDown: "down", s: "down",
+  x: "web", z: "web", X: "web", Z: "web",
 };
+// hold anywhere on the screen to swing on a web!
+canvas.addEventListener("pointerdown", () => { input.web = true; });
+window.addEventListener("pointerup", () => { input.web = false; });
+window.addEventListener("pointercancel", () => { input.web = false; });
 window.addEventListener("keydown", e => {
   const k = keymap[e.key];
   if (k) {
@@ -237,6 +266,7 @@ function bindTouch(id, key) {
 }
 bindTouch("btn-left", "left"); bindTouch("btn-right", "right");
 bindTouch("btn-jump", "up"); bindTouch("btn-dig", "down");
+bindTouch("btn-web", "web");
 if ("ontouchstart" in window) document.getElementById("touch-controls").style.display = "block";
 
 // ============================== NPCS ==============================
@@ -263,8 +293,17 @@ for (let i = 0; i < 14; i++) {
 
 // ============================== TRAMPOLINES ==============================
 const tramps = [
-  { c: 14, w: 2 }, { c: 30, w: 3 }, { c: 48, w: 2 }, { c: 63, w: 3 }, { c: 78, w: 2 },
-].map(t => ({ x: t.c * TILE, y: SURFACE * TILE - 16, w: t.w * TILE, h: 16, squash: 0 }));
+  // ground level
+  { c: 14, w: 2, r: SURFACE }, { c: 30, w: 3, r: SURFACE }, { c: 48, w: 2, r: SURFACE }, { c: 63, w: 3, r: SURFACE }, { c: 78, w: 2, r: SURFACE },
+  // side perches
+  { c: 21, w: 2, r: SURFACE - 5 }, { c: 69, w: 2, r: SURFACE - 6 },
+  // the bouncy tower — higher and higher!
+  { c: 45, w: 2, r: SURFACE - 6 }, { c: 53, w: 2, r: SURFACE - 12 },
+  { c: 44, w: 2, r: SURFACE - 18 }, { c: 52, w: 2, r: SURFACE - 24 }, { c: 45, w: 3, r: SURFACE - 30 },
+].map(t => ({ x: t.c * TILE, y: t.r * TILE - 16, w: t.w * TILE, h: 16, squash: 0, surface: t.r === SURFACE }));
+
+// a super star prize at the very top of the tower
+const star = { x: 51 * TILE + 22, y: (SURFACE - 35) * TILE - 50, taken: false, timer: 0 };
 
 // ============================== FX ==============================
 const particles = [], flyGems = [], confetti = [], popups = [];
@@ -314,7 +353,10 @@ function addTreasure(info, x, y) {
   treasure += pts;
   res[info.key]++;
   sfx.gem();
-  if (treasure >= (rewardLevel + 1) * REWARD_EVERY && rewardLevel < 999) {
+  checkReward();
+}
+function checkReward() {
+  if (treasure >= (rewardLevel + 1) * REWARD_EVERY) {
     rewardLevel++;
     giveReward();
   }
@@ -341,12 +383,12 @@ function closeReward() {
 // ============================== FACTORY ==============================
 const FACTORY = { x: 2 * TILE, w: 5.5 * TILE, doorPad: 40 };
 const BUILDABLES = [
-  { emoji: "🎈", name: "Balloon Tree", cost: { gold: 2 } },
-  { emoji: "🐶", name: "Robot Puppy", cost: { gold: 4 }, pet: true },
-  { emoji: "🛝", name: "Big Slide", cost: { emerald: 3 } },
-  { emoji: "🏎️", name: "Race Car", cost: { gold: 5, emerald: 2 } },
-  { emoji: "🚀", name: "Rocket Ship", cost: { diamond: 3 } },
-  { emoji: "⛲", name: "Rainbow Fountain", cost: { rainbow: 2 } },
+  { emoji: "🎈", name: "Balloon Tree", cost: { gold: 2 }, key: "balloon" },
+  { emoji: "🐶", name: "Robot Puppy", cost: { gold: 4 }, pet: true, key: "puppy" },
+  { emoji: "🛝", name: "Big Slide", cost: { emerald: 3 }, key: "slide" },
+  { emoji: "🏎️", name: "Race Car", cost: { gold: 5, emerald: 2 }, key: "car" },
+  { emoji: "🚀", name: "Rocket Ship", cost: { diamond: 3 }, key: "rocket" },
+  { emoji: "⛲", name: "Rainbow Fountain", cost: { rainbow: 2 }, key: "fountain" },
 ];
 const RES_EMOJI = { gold: "🪙", emerald: "💚", diamond: "💎", rainbow: "🌈" };
 const BUILD_SPOTS = [10, 12, 18, 22, 26, 36, 40, 45, 54, 58, 70, 74, 85];
@@ -398,7 +440,7 @@ function buildItem(i) {
   } else {
     const spot = BUILD_SPOTS[builtItems.length % BUILD_SPOTS.length];
     const off = Math.floor(builtItems.length / BUILD_SPOTS.length) * 30;
-    builtItems.push({ emoji: b.emoji, x: spot * TILE + off, y: SURFACE * TILE });
+    builtItems.push({ emoji: b.emoji, key: b.key, x: spot * TILE + off, y: SURFACE * TILE, cool: 0, gift: 8 });
   }
   sfx.reward();
   rainConfetti();
@@ -412,6 +454,80 @@ document.getElementById("factory-screen").addEventListener("pointerdown", e => {
   if (e.target === document.getElementById("factory-screen")) closeFactory();
 });
 window.addEventListener("keydown", e => { if (e.key === "e" || e.key === "Enter") { if (state === "factory") closeFactory(); else if (nearFactory()) openFactory(); } });
+
+// built things DO things — touch them!
+function updateBuilt(dt) {
+  const pcx = player.x + player.w / 2, pfeet = player.y + player.h;
+  for (const b of builtItems) {
+    b.cool -= dt;
+    if (b.key === "fountain") {
+      // always spraying rainbows, and it makes free gems!
+      if (Math.random() < dt * 25) particles.push({ x: b.x + (Math.random() - 0.5) * 20, y: b.y - 40, vx: (Math.random() - 0.5) * 120, vy: -180 - Math.random() * 120, life: 0.9, color: `hsl(${Math.random() * 360},90%,65%)`, size: 4 });
+      b.gift -= dt;
+      if (b.gift <= 0 && Math.abs(pcx - b.x) < 500) {
+        b.gift = 14;
+        const keys = ["gold", "emerald", "diamond"];
+        const k = keys[Math.floor(Math.random() * keys.length)];
+        res[k]++; treasure++;
+        flyGems.push({ x: b.x, y: b.y - 50, t: 0, color: k === "gold" ? "#ffce00" : k === "emerald" ? "#2ecc71" : "#7fdBff" });
+        popups.push({ x: b.x, y: b.y - 70, text: "⛲ made " + RES_EMOJI[k] + "!", life: 1.4 });
+        sfx.gem();
+        checkReward();
+      }
+      continue;
+    }
+    const near = Math.abs(pcx - b.x) < 55 && Math.abs(pfeet - b.y) < 75;
+    if (!near || b.cool > 0) continue;
+    if (b.key === "balloon") {
+      player.floatT = 6; b.cool = 7;
+      popups.push({ x: b.x, y: b.y - 70, text: "Up up up! 🎈", life: 1.3 });
+      sfx.whee();
+    } else if (b.key === "slide") {
+      player.boostVx = (Math.sign(pcx - b.x) || player.facing) * 560;
+      player.vy = -520; b.cool = 2;
+      popups.push({ x: b.x, y: b.y - 70, text: "WHEEEE! 🛝", life: 1.2 });
+      sfx.whee();
+    } else if (b.key === "car") {
+      player.carT = 9; b.cool = 11;
+      popups.push({ x: b.x, y: b.y - 70, text: "VROOM VROOM! 🏎️", life: 1.3 });
+      sfx.vroom();
+    } else if (b.key === "rocket") {
+      player.rocketT = 2.3; b.cool = 13;
+      popups.push({ x: b.x, y: b.y - 70, text: "BLAST OFF! 🚀", life: 1.4 });
+      sfx.vroom();
+    }
+  }
+  // the robot puppy digs up surprise gold
+  if (pet.active) {
+    pet.gift = (pet.gift ?? 15) - dt;
+    if (pet.gift <= 0 && Math.abs(pet.x - player.x) < 260) {
+      pet.gift = 18 + Math.random() * 10;
+      res.gold++; treasure++;
+      flyGems.push({ x: pet.x, y: pet.y - 20, t: 0, color: "#ffce00" });
+      popups.push({ x: pet.x, y: pet.y - 45, text: "🐶 dug up 🪙!", life: 1.4 });
+      sfx.gem();
+      checkReward();
+    }
+  }
+}
+
+// the super star at the top of the trampoline tower
+function updateStar(dt) {
+  if (star.taken) {
+    star.timer -= dt;
+    if (star.timer <= 0) star.taken = false;
+    return;
+  }
+  const dx = player.x + player.w / 2 - star.x, dy = player.y + player.h / 2 - star.y;
+  if (dx * dx + dy * dy < 60 * 60) {
+    star.taken = true; star.timer = 30;
+    treasure += 5; res.rainbow++;
+    popups.push({ x: star.x, y: star.y - 40, text: "SUPER STAR! +5 ⭐", life: 2 });
+    sfx.reward();
+    rainConfetti();
+    checkReward();
+  }
+}
 
 function updatePet(dt) {
   if (!pet.active) return;
@@ -439,7 +555,7 @@ function tryMine(dt) {
   }
   if (tc < 0) { mineTarget = null; return; }
   const t = tileAt(tc, tr);
-  if (!solid(t) || t === 9) { mineTarget = null; return; }
+  if (!solid(t) || t === 9 || t === 8) { mineTarget = null; return; }
   if (!mineTarget || mineTarget.c !== tc || mineTarget.r !== tr) mineTarget = { c: tc, r: tr, progress: 0 };
   mineTarget.progress += dt / HARDNESS[t];
   if (Math.random() < dt * 14) {
@@ -461,88 +577,151 @@ function tryMine(dt) {
 }
 
 // ============================== PHYSICS ==============================
+function releaseWeb() { player.web = null; }
 function moveAndCollide(dt) {
-  player.vx = (input.right ? MOVE : 0) - (input.left ? MOVE : 0);
-  if (player.vx !== 0) { player.facing = Math.sign(player.vx); player.walkT += dt * 10; }
+  const p = player;
+  const steer = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+
+  if (p.rocketT > 0) {
+    // riding the rocket!
+    p.rocketT -= dt;
+    releaseWeb();
+    p.vx = steer * 220;
+    p.vy = -1050;
+    if (p.y < TILE * 3) p.rocketT = 0; // don't fly off the top of the sky
+    for (let i = 0; i < 2; i++) particles.push({ x: p.x + p.w / 2 + (Math.random() - 0.5) * 14, y: p.y + p.h + 8, vx: (Math.random() - 0.5) * 80, vy: 200 + Math.random() * 150, life: 0.5, color: i ? "#ff9800" : "#ffe066", size: 5 });
+    if (p.rocketT <= 0) { p.floatT = Math.max(p.floatT, 4); popups.push({ x: p.x + p.w / 2, y: p.y - 30, text: "🪂 Float down!", life: 1.2 }); }
+  } else if (p.web) {
+    // swinging on a web
+    if (!input.web || p.onGround) {
+      releaseWeb();
+      if (!p.onGround) p.vy -= 180; // fun little fling
+    } else {
+      p.vy += GRAV * dt;
+      p.vx += steer * 520 * dt;
+      const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+      let nx = cx + p.vx * dt, ny = cy + p.vy * dt;
+      const dx = nx - p.web.x, dy = ny - p.web.y;
+      const d = Math.hypot(dx, dy);
+      if (d > p.web.len) {
+        const s = p.web.len / d;
+        nx = p.web.x + dx * s; ny = p.web.y + dy * s;
+        p.vx = (nx - cx) / dt; p.vy = (ny - cy) / dt;
+      }
+    }
+  } else {
+    // normal walking / riding
+    p.boostVx *= Math.pow(0.05, dt);
+    if (Math.abs(p.boostVx) < 5) p.boostVx = 0;
+    p.vx = steer * MOVE * (p.carT > 0 ? 1.8 : 1) + p.boostVx;
+    const g = p.floatT > 0 ? GRAV * 0.22 : GRAV;
+    p.vy += g * dt;
+    if (p.floatT > 0 && p.vy > 140) p.vy = 140; // drift down gently with a balloon
+  }
+  if (p.floatT > 0) p.floatT -= dt;
+  if (p.carT > 0) {
+    p.carT -= dt;
+    if (p.onGround && Math.abs(p.vx) > 60 && Math.random() < dt * 18)
+      particles.push({ x: p.x + p.w / 2 - p.facing * 20, y: p.y + p.h - 4, vx: -p.facing * 60, vy: -40, life: 0.5, color: "#ddd", size: 5 });
+  }
+  if (p.vx !== 0) { p.facing = Math.sign(p.vx) || p.facing; p.walkT += dt * 10; }
+
+  // thwip! shoot a web up ahead (release and press again for a new one)
+  if (input.web && !p.web && !p.webHeld && p.rocketT <= 0) {
+    if (p.onGround) { p.vy = -430; p.onGround = false; }
+    const ax = p.x + p.w / 2 + p.facing * 150, ay = p.y - 250;
+    p.web = { x: ax, y: ay, len: Math.hypot(p.x + p.w / 2 - ax, p.y + p.h / 2 - ay) };
+    p.webHeld = true;
+    sfx.thwip();
+  }
+  if (!input.web) p.webHeld = false;
 
   // jumping (double jump = never stuck)
   if (input.jumpPressed) {
-    if (player.onGround || player.jumps > 0) {
-      player.vy = -JUMP;
-      if (!player.onGround) player.jumps--;
-      player.squash = -0.25;
+    if (p.web) { releaseWeb(); p.vy = -JUMP * 0.9; sfx.jump(); }
+    else if (p.onGround || p.jumps > 0) {
+      p.vy = -JUMP;
+      if (!p.onGround) p.jumps--;
+      p.squash = -0.25;
       sfx.jump();
     }
     input.jumpPressed = false;
   }
 
   // spidey wall-climb: hold toward wall + up
-  if (player.onWall !== 0 && input.up && !player.onGround) {
-    player.vy = Math.min(player.vy, -CLIMB);
+  if (p.onWall !== 0 && input.up && !p.onGround && !p.web) {
+    p.vy = Math.min(p.vy, -CLIMB);
   }
 
-  player.vy += GRAV * dt;
-  if (player.vy > 950) player.vy = 950;
-  if (player.onWall !== 0 && player.vy > 180) player.vy = 180; // slow wall slide
+  if (p.vy > 980) p.vy = 980;
+  if (p.onWall !== 0 && p.vy > 180 && !p.web) p.vy = 180; // slow wall slide
 
-  // X axis
-  player.x += player.vx * dt;
-  player.onWall = 0;
+  const prevFeet = p.y + p.h;
+
+  // X axis (cloud platforms are pass-through sideways)
+  p.x += p.vx * dt;
+  p.onWall = 0;
   {
-    const top = Math.floor(player.y / TILE), bot = Math.floor((player.y + player.h - 1) / TILE);
-    if (player.vx > 0) {
-      const c = Math.floor((player.x + player.w) / TILE);
-      for (let r = top; r <= bot; r++) if (solid(tileAt(c, r))) { player.x = c * TILE - player.w - 0.01; break; }
-    } else if (player.vx < 0) {
-      const c = Math.floor(player.x / TILE);
-      for (let r = top; r <= bot; r++) if (solid(tileAt(c, r))) { player.x = (c + 1) * TILE + 0.01; break; }
+    const top = Math.floor(p.y / TILE), bot = Math.floor((p.y + p.h - 1) / TILE);
+    if (p.vx > 0) {
+      const c = Math.floor((p.x + p.w) / TILE);
+      for (let r = top; r <= bot; r++) { const t = tileAt(c, r); if (solid(t) && t !== 8) { p.x = c * TILE - p.w - 0.01; break; } }
+    } else if (p.vx < 0) {
+      const c = Math.floor(p.x / TILE);
+      for (let r = top; r <= bot; r++) { const t = tileAt(c, r); if (solid(t) && t !== 8) { p.x = (c + 1) * TILE + 0.01; break; } }
     }
+    p.x = Math.max(TILE + 1, Math.min((COLS - 1) * TILE - p.w - 1, p.x));
     // wall sensors (even when standing still, for climb + mining)
-    const lc = Math.floor((player.x - 2) / TILE), rc = Math.floor((player.x + player.w + 2) / TILE);
+    const lc = Math.floor((p.x - 2) / TILE), rc = Math.floor((p.x + p.w + 2) / TILE);
     for (let r = top; r <= bot; r++) {
-      if (solid(tileAt(lc, r))) player.onWall = -1;
-      else if (solid(tileAt(rc, r))) player.onWall = 1;
+      const lt = tileAt(lc, r), rt = tileAt(rc, r);
+      if (solid(lt) && lt !== 8) p.onWall = -1;
+      else if (solid(rt) && rt !== 8) p.onWall = 1;
     }
   }
 
-  // Y axis
-  player.y += player.vy * dt;
-  player.onGround = false;
+  // Y axis (you can bounce UP through cloud platforms, then land on top)
+  p.y += p.vy * dt;
+  p.onGround = false;
   {
-    const left = Math.floor(player.x / TILE), right = Math.floor((player.x + player.w - 1) / TILE);
-    if (player.vy > 0) {
-      const r = Math.floor((player.y + player.h) / TILE);
-      for (let c = left; c <= right; c++) if (solid(tileAt(c, r))) {
-        if (player.vy > 500) { player.squash = 0.35; burst(player.x + player.w / 2, player.y + player.h, "#ccc", 5); }
-        player.y = r * TILE - player.h - 0.01; player.vy = 0;
-        player.onGround = true; player.jumps = 2;
+    const left = Math.floor(p.x / TILE), right = Math.floor((p.x + p.w - 1) / TILE);
+    if (p.vy > 0) {
+      const r = Math.floor((p.y + p.h) / TILE);
+      for (let c = left; c <= right; c++) {
+        const t = tileAt(c, r);
+        if (!solid(t)) continue;
+        if (t === 8 && prevFeet > r * TILE + 1) continue; // already below the cloud top
+        if (p.vy > 500) { p.squash = 0.35; burst(p.x + p.w / 2, p.y + p.h, "#ccc", 5); }
+        p.y = r * TILE - p.h - 0.01; p.vy = 0;
+        p.onGround = true; p.jumps = 2; p.combo = 0;
+        releaseWeb();
         break;
       }
-    } else if (player.vy < 0) {
-      const r = Math.floor(player.y / TILE);
-      for (let c = left; c <= right; c++) if (solid(tileAt(c, r))) {
-        player.y = (r + 1) * TILE + 0.01; player.vy = 0; break;
-      }
+    } else if (p.vy < 0) {
+      const r = Math.floor(p.y / TILE);
+      for (let c = left; c <= right; c++) { const t = tileAt(c, r); if (solid(t) && t !== 8) { p.y = (r + 1) * TILE + 0.01; p.vy = 0; break; } }
     }
   }
 
-  // trampolines!
+  // trampolines! combo bounces launch higher and higher
   for (const t of tramps) {
-    if (player.vy > 100 &&
-        player.x + player.w > t.x + 4 && player.x < t.x + t.w - 4 &&
-        player.y + player.h > t.y && player.y + player.h < t.y + 40) {
-      player.vy = -TRAMP;
-      player.y = t.y - player.h - 1;
-      player.jumps = 2;
-      player.squash = -0.4;
+    if (p.vy > 100 &&
+        p.x + p.w > t.x + 4 && p.x < t.x + t.w - 4 &&
+        p.y + p.h > t.y && p.y + p.h < t.y + 40) {
+      p.combo = Math.min(p.combo + 1, 6);
+      p.vy = -TRAMP * (1 + 0.13 * (p.combo - 1));
+      p.y = t.y - p.h - 1;
+      p.jumps = 2;
+      p.squash = -0.4;
       t.squash = 1;
+      releaseWeb();
       sfx.bounce();
-      burst(player.x + player.w / 2, t.y, "#ffe066", 14);
-      popups.push({ x: player.x + player.w / 2, y: t.y - 30, text: "BOING!", life: 1 });
+      burst(p.x + p.w / 2, t.y, "#ffe066", 14);
+      popups.push({ x: p.x + p.w / 2, y: t.y - 30, text: p.combo > 1 ? "BOING x" + p.combo + "!" : "BOING!", life: 1 });
     }
   }
 
-  player.squash *= Math.pow(0.001, dt); // ease back
+  p.squash *= Math.pow(0.001, dt); // ease back
 }
 
 // ============================== NPC UPDATE ==============================
@@ -562,6 +741,7 @@ function updateNPCs(dt) {
     n.y += n.vy * dt;
     let ground = SURFACE * TILE;
     for (const t of tramps) {
+      if (!t.surface) continue;
       if (n.x > t.x && n.x < t.x + t.w) {
         ground = t.y;
         if (n.y >= ground && n.vy > 0 && n.bouncy) {
@@ -596,7 +776,7 @@ function updateCamera() {
   cam.x += (tx - cam.x) * 0.12;
   cam.y += (ty - cam.y) * 0.12;
   cam.x = Math.max(0, Math.min(COLS * TILE - W, cam.x));
-  cam.y = Math.max(-H * 0.35, Math.min(ROWS * TILE - H, cam.y));
+  cam.y = Math.max(0, Math.min(ROWS * TILE - H, cam.y));
 }
 
 // ============================== DRAWING ==============================
@@ -662,6 +842,15 @@ function drawTiles() {
         ctx.fillStyle = "#8f9499"; ctx.fillRect(x, y, TILE, TILE);
         ctx.fillStyle = "#7a7f85";
         ctx.fillRect(x + 4, y + 6, 12, 9); ctx.fillRect(x + 24, y + 18, 13, 10); ctx.fillRect(x + 8, y + 30, 10, 8);
+      } else if (t === 8) {
+        // puffy cloud platform
+        ctx.fillStyle = "rgba(255,255,255,.95)";
+        rr(x - 1, y + 10, TILE + 2, TILE - 16, 12); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x + 10, y + 12, 10, 0, 7); ctx.arc(x + 25, y + 8, 12, 0, 7); ctx.arc(x + 38, y + 13, 9, 0, 7);
+        ctx.fill();
+        ctx.fillStyle = "rgba(170,205,240,.55)";
+        rr(x + 4, y + TILE - 12, TILE - 8, 6, 3); ctx.fill();
       } else if (t === 9) {
         ctx.fillStyle = "#41444a"; ctx.fillRect(x, y, TILE, TILE);
         ctx.strokeStyle = "#2d2f33"; ctx.lineWidth = 2;
@@ -858,13 +1047,51 @@ function drawPerson(n) {
     ctx.textAlign = "left";
   }
 }
+function drawStar() {
+  if (star.taken) return;
+  const x = star.x - cam.x, y = star.y - cam.y;
+  if (x < -60 || x > W + 60 || y < -60 || y > H + 60) return;
+  const t = performance.now() / 1000;
+  const s = 1 + Math.sin(t * 3) * 0.12;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.font = "48px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("⭐", 0, 16);
+  ctx.restore();
+  ctx.textAlign = "left";
+  if (Math.random() < 0.1) particles.push({ x: star.x + (Math.random() - 0.5) * 60, y: star.y + (Math.random() - 0.5) * 50, vx: 0, vy: -30, life: 0.6, color: "#fff176", size: 3 });
+}
 function drawPlayer() {
   const p = player;
   const x = p.x + p.w / 2 - cam.x, yb = p.y + p.h - cam.y; // feet
+  // web line first, so it sits behind Spidey
+  if (p.web) {
+    ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x + p.facing * 8, yb - p.h - 10);
+    ctx.lineTo(p.web.x - cam.x, p.web.y - cam.y);
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(p.web.x - cam.x, p.web.y - cam.y, 5, 0, 7); ctx.fill();
+  }
   const sq = p.squash; // + = squashed flat, - = stretched tall
   ctx.save();
   ctx.translate(x, yb);
   ctx.scale(1 + sq * 0.6, 1 - sq * 0.6);
+  ctx.textAlign = "center";
+  if (p.rocketT > 0) { ctx.font = "42px sans-serif"; ctx.fillText("🚀", -2, 16); }
+  else if (p.carT > 0) {
+    ctx.font = "44px sans-serif";
+    ctx.save(); if (p.facing < 0) ctx.scale(-1, 1); ctx.fillText("🏎️", 0, 4); ctx.restore();
+  }
+  if (p.floatT > 0) {
+    ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(6, -58); ctx.lineTo(13, -82); ctx.stroke();
+    ctx.font = "30px sans-serif"; ctx.fillText("🎈", 14, -82);
+  }
+  ctx.textAlign = "left";
   const legSwing = p.onGround && p.vx !== 0 ? Math.sin(p.walkT) * 7 : (p.onGround ? 0 : 5);
   // legs (blue)
   ctx.strokeStyle = "#1b3fa0"; ctx.lineWidth = 8; ctx.lineCap = "round";
@@ -1032,6 +1259,8 @@ function frame(now) {
     tryMine(dt);
     updateNPCs(dt);
     updatePet(dt);
+    updateBuilt(dt);
+    updateStar(dt);
     updateCamera();
   } else if (state === "reward" || state === "factory") {
     updateNPCs(dt);
@@ -1049,6 +1278,7 @@ function frame(now) {
   drawTiles();
   drawFactory();
   drawBuilt();
+  drawStar();
   drawTramps();
   for (const n of npcs) drawPerson(n);
   if (state !== "title") drawPlayer();
@@ -1060,16 +1290,61 @@ requestAnimationFrame(frame);
 // keep the game running even when rAF is throttled (hidden/background tab)
 setInterval(() => { if (performance.now() - last > 100) frame(performance.now()); }, 33);
 
+// ============================== SAVE / LOAD ==============================
+const SAVE_KEY = "spidey-lobby-v2";
+function saveGame() {
+  if (state === "title") return;
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      treasure, rewardLevel, unlocked, res, hat: player.hat, pet: pet.active,
+      built: builtItems.map(b => ({ emoji: b.emoji, key: b.key, x: b.x, y: b.y })),
+      grid: grid.map(row => row.join("")).join("|"),
+    }));
+  } catch (e) {}
+}
+let hasSave = false;
+function loadGame() {
+  try {
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY));
+    if (!d) return;
+    const rows = d.grid.split("|");
+    if (rows.length !== ROWS || rows[0].length !== COLS) return;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) grid[r][c] = +rows[r][c];
+    treasure = d.treasure; rewardLevel = d.rewardLevel;
+    unlocked = d.unlocked || [];
+    Object.assign(res, d.res);
+    player.hat = d.hat || null;
+    pet.active = !!d.pet;
+    (d.built || []).forEach(b => builtItems.push({ ...b, cool: 0, gift: 8 }));
+    hasSave = true;
+  } catch (e) {}
+}
+loadGame();
+setInterval(saveGame, 4000);
+window.addEventListener("visibilitychange", saveGame);
+
+if (hasSave) {
+  document.getElementById("reset-btn").style.display = "block";
+  document.getElementById("play-btn").textContent = "▶ KEEP PLAYING!";
+}
+document.getElementById("reset-btn").addEventListener("click", () => {
+  localStorage.removeItem(SAVE_KEY);
+  location.reload();
+});
+
 document.getElementById("play-btn").addEventListener("click", () => {
   initAudio();
   document.getElementById("title-screen").style.display = "none";
   state = "play";
+  // snap the camera straight to Spidey
+  cam.x = Math.max(0, Math.min(COLS * TILE - W, player.x + player.w / 2 - W / 2));
+  cam.y = Math.max(0, Math.min(ROWS * TILE - H, player.y - H * 0.62));
   sfx.reward();
 });
 window.addEventListener("pointerdown", initAudio, { once: true });
 
 // expose for debugging
-window.game = { player, grid, npcs, tramps, input, res, pet, builtItems, openFactory, buildItem, get treasure() { return treasure; }, set treasure(v) { treasure = v; }, get state() { return state; } };
+window.game = { player, grid, npcs, tramps, input, res, pet, builtItems, star, openFactory, buildItem, saveGame, step: n => { for (let i = 0; i < n; i++) frame(last + 16.7); }, get treasure() { return treasure; }, set treasure(v) { treasure = v; }, get state() { return state; } };
 </script>
 </body>
 </html>
